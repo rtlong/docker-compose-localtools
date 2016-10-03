@@ -1,0 +1,14 @@
+#!/bin/bash
+
+set -euo pipefail
+
+docker-compose create
+
+for network in local.goodguide.com; do
+	for container in dockergen nginx; do
+		docker network connect "${network}" "${container}" || :
+	done
+done
+
+docker-compose start
+docker-compose kill -s HUP dockergen

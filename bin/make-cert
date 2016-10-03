@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set -euo pipefail
+
+domain="$1"; shift
+
+# set -x
+
+cd ssl/
+
+clobber=0
+if [[ -f ${domain}.key ]]; then
+		read -p "./ssl/${domain}.key file already exists! Generate new private key? [y/N] " answer
+		[[ ${answer:-n} = y ]] && clobber=1
+fi
+[[ ( ! -f ${domain}.key ) || ( $clobber = 1 ) ]] && openssl genrsa -out "${domain}.key" 2048
+
+if [[ $domain = default ]]; then
+		cn=localhost
+else
+		cn="${domain}"
+fi
+
+req_config() {
+	cat <<-EOF
+	[req]
+	default_bits = 2048
+	default_md = sha256
+	req_extensions = req_ext
+	distinguished_name = dn
+	[ dn ]
+	[ req_ext ]
+	keyUsage=digitalSignature,keyEncipherment
+	subjectAltName = @alt_names
+	[ v3_req ]
+	keyUsage=digitalSignature,keyEncipherment
+	subjectAltName = @alt_names
+	[alt_names]
+	DNS.1 = ${cn}
+	DNS.2 = *.${cn}
+	EOF
+}
+
+# generate CSR
+openssl req -new -sha256 -key "${domain}.key" -out "${domain}.csr" -subj "/C=US/ST=California/L=San Francisco/O=RTLong Geek Services, LLC./OU=/CN=${cn}" -config <(req_config) -extensions v3_req
+openssl req -in "${domain}.csr" -text -noout
+
+if openssl req -in "${domain}.csr" -text -noout | grep -q -i "Signature.*SHA256"; then
+	echo "All is well"
+else
+	echo "This certificate will stop working in 2017! You must update OpenSSL to generate a widely-compatible certificate"
+	exit 1
+fi
+
+# Pre-emptively get the password for the CA key as an environment variable, which allows the variable to be passed in to this script
+[[ ${ca_password:-} ]] || read -s -p 'Password for ~/.ssl/ca.key: ' ca_password
+echo
+export ca_password
+
+# sign CSR with CA, output Certificate
+openssl x509 -req -sha256 -passin env:ca_password -days 10000 -CA ~/.ssl/ca.crt -CAkey ~/.ssl/ca.key -CAcreateserial -CAserial ~/.ssl/ca.srl -in "${domain}.csr" -out "${domain}.crt" -extensions v3_req -extfile <(req_config)
+
+rm "${domain}.csr"
