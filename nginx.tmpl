@@ -1,19 +1,18 @@
 {{/* Source: https://github.com/jwilder/nginx-proxy/blob/master/nginx.tmpl */}}
 {{ $CurrentContainer := where $ "ID" .Docker.CurrentContainerID | first }}
 
-
 # If we receive X-Forwarded-Proto, pass it through; otherwise, pass along the
 # scheme used to connect to this server
 map $http_x_forwarded_proto $proxy_x_forwarded_proto {
-  default $http_x_forwarded_proto;
-  ''      $scheme;
+    default $http_x_forwarded_proto;
+    ''      $scheme;
 }
 
-# If we receive Upgrade, set Connection to "upgrade"; otherwise, delete any
+# If we receive Upgrade, set Connection to 'upgrade'; otherwise, delete any
 # Connection header that may have been passed to this server
 map $http_upgrade $proxy_connection {
-  default upgrade;
-  '' close;
+    default upgrade;
+    '' close;
 }
 
 gzip_types text/plain text/css application/javascript application/json application/x-javascript text/xml application/xml application/xml+rss text/javascript;
@@ -27,7 +26,6 @@ include /etc/nginx/proxy.conf;
 {{ else }}
 # HTTP 1.1 support
 proxy_http_version 1.1;
-proxy_buffering off;
 proxy_set_header Host $http_host;
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection $proxy_connection;
@@ -37,68 +35,90 @@ proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto;
 
 # Mitigate httpoxy attack (see README for details)
 proxy_set_header Proxy "";
+
+proxy_connect_timeout 120s;
+proxy_send_timeout    120s;
+proxy_read_timeout    120s;
+
+proxy_buffering            on;
+proxy_buffer_size          8k;
+proxy_buffers              24 8k;
+proxy_busy_buffers_size    8k;
+proxy_max_temp_file_size   2048m;
+proxy_temp_file_write_size 32k;
+
+proxy_cache_path /data/nginx/cache levels=1:2 keys_zone=STATIC:10m inactive=24h max_size=1g;
+proxy_cache            STATIC;
+proxy_cache_use_stale  error timeout invalid_header updating http_500 http_502 http_503 http_504;
+
 {{ end }}
 
 server {
-	server_name _; # This is just an invalid value which will never trigger on a real hostname.
-	listen 80;
-	access_log /var/log/nginx/access.log vhost;
-	# return 503;
+    server_name _; # This is just an invalid value which will never trigger on a real hostname.
+    listen 80;
+    access_log /var/log/nginx/access.log vhost;
+
+    add_header X-Server rtlong-system-nginx-proxy;
+
+    # return 503;
 }
 
 {{ if (and (exists "/etc/nginx/certs/default.crt") (exists "/etc/nginx/certs/default.key")) }}
 server {
-	server_name _; # This is just an invalid value which will never trigger on a real hostname.
-	listen 443 ssl http2;
-	access_log /var/log/nginx/access.log vhost;
-	# return 503;
+    server_name _; # This is just an invalid value which will never trigger on a real hostname.
+    listen 443 ssl http2;
+    access_log /var/log/nginx/access.log vhost;
 
-	ssl_session_tickets off;
-	ssl_certificate /etc/nginx/certs/default.crt;
-	ssl_certificate_key /etc/nginx/certs/default.key;
+    add_header X-Server rtlong-system-nginx-proxy;
+
+    # return 503;
+
+    ssl_session_tickets off;
+    ssl_certificate /etc/nginx/certs/default.crt;
+    ssl_certificate_key /etc/nginx/certs/default.key;
 }
 {{ end }}
 
 {{ define "upstream" }}
-	{{ if .Address }}
-	{{/* If we got the containers from swarm and this containers port is published to host, use host IP:PORT */}}
-	{{ if and .Container.Node.ID .Address.HostPort }}
-	# {{ .Container.Node.Name }}/{{ .Container.Name }}
-	server {{ .Container.Node.Address.IP }}:{{ .Address.HostPort }};
-	{{/* If there is no swarm node or the port is not published on host, use containers IP:PORT */}}
-	{{ else if .Network }}
-	# {{ .Container.Name }}
-	server {{ .Network.IP }}:{{ .Address.Port }};
-	{{ end }}
-	{{ else if .Network }}
-	# {{ .Container.Name }}
-	server {{ .Network.IP }} down;
-	{{ end }}
+{{ if .Address }}
+{{/* If we got the containers from swarm and this containers port is published to host, use host IP:PORT */}}
+{{ if and .Container.Node.ID .Address.HostPort }}
+# {{ .Container.Node.Name }}/{{ .Container.Name }}
+server {{ .Container.Node.Address.IP }}:{{ .Address.HostPort }};
+{{/* If there is no swarm node or the port is not published on host, use containers IP:PORT */}}
+{{ else if .Network }}
+# {{ .Container.Name }}
+server {{ .Network.IP }}:{{ .Address.Port }};
+{{ end }}
+{{ else if .Network }}
+# {{ .Container.Name }}
+server {{ .Network.IP }} down;
+{{ end }}
 {{ end }}
 
 {{ range $host, $containers := groupByMulti $ "Env.VIRTUAL_HOST" "," }}
 
 upstream {{ $host }} {
-	{{ range $container := $containers }}
-	{{ $addrLen := len $container.Addresses }}
-	{{ range $knownNetwork := $CurrentContainer.Networks }}
-	{{ range $containerNetwork := $container.Networks }}
-	{{ if eq $knownNetwork.Name $containerNetwork.Name }}
-	## Can be connect with "{{ $containerNetwork.Name }}" network
-	{{/* If only 1 port exposed, use that */}}
-	{{ if eq $addrLen 1 }}
-	{{ $address := index $container.Addresses 0 }}
-	{{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
-	{{/* If more than one port exposed, use the one matching VIRTUAL_PORT env var, falling back to standard web port 80 */}}
-	{{ else }}
-	{{ $port := coalesce $container.Env.VIRTUAL_PORT "80" }}
-	{{ $address := where $container.Addresses "Port" $port | first }}
-	{{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
-	{{ end }}
-	{{ end }}
-	{{ end }}
-	{{ end }}
-	{{ end }}
+    {{ range $container := $containers }}
+    {{ $addrLen := len $container.Addresses }}
+    {{ range $knownNetwork := $CurrentContainer.Networks }}
+    {{ range $containerNetwork := $container.Networks }}
+    {{ if eq $knownNetwork.Name $containerNetwork.Name }}
+    ## Can be connect with "{{ $containerNetwork.Name }}" network
+    {{/* If only 1 port exposed, use that */}}
+    {{ if eq $addrLen 1 }}
+    {{ $address := index $container.Addresses 0 }}
+    {{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
+    {{/* If more than one port exposed, use the one matching VIRTUAL_PORT env var, falling back to standard web port 80 */}}
+    {{ else }}
+    {{ $port := coalesce $container.Env.VIRTUAL_PORT "80" }}
+    {{ $address := where $container.Addresses "Port" $port | first }}
+    {{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
+    {{ end }}
+    {{ end }}
+    {{ end }}
+    {{ end }}
+    {{ end }}
 }
 
 {{ $default_host := or ($.Env.DEFAULT_HOST) "" }}
@@ -129,60 +149,60 @@ upstream {{ $host }} {
 
 {{ if eq $https_method "redirect" }}
 server {
-	server_name {{ $host }};
-	listen 80 {{ $default_server }};
-	access_log /var/log/nginx/access.log vhost;
-	return 301 https://$host$request_uri;
+    server_name {{ $host }};
+    listen 80 {{ $default_server }};
+    access_log /var/log/nginx/access.log vhost;
+    return 301 https://$host$request_uri;
 }
 {{ end }}
 
 server {
-	server_name {{ $host }};
-	listen 443 ssl http2 {{ $default_server }};
-	access_log /var/log/nginx/access.log vhost;
+    server_name {{ $host }};
+    listen 443 ssl http2 {{ $default_server }};
+    access_log /var/log/nginx/access.log vhost;
 
-	ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
-	ssl_ciphers 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS';
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+    ssl_ciphers 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS';
 
-	ssl_prefer_server_ciphers on;
-	ssl_session_timeout 5m;
-	ssl_session_cache shared:SSL:50m;
-	ssl_session_tickets off;
+    ssl_prefer_server_ciphers on;
+    ssl_session_timeout 5m;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
 
-	ssl_certificate /etc/nginx/certs/{{ (printf "%s.crt" $cert) }};
-	ssl_certificate_key /etc/nginx/certs/{{ (printf "%s.key" $cert) }};
+    ssl_certificate /etc/nginx/certs/{{ (printf "%s.crt" $cert) }};
+    ssl_certificate_key /etc/nginx/certs/{{ (printf "%s.key" $cert) }};
 
-	{{ if (exists (printf "/etc/nginx/certs/%s.dhparam.pem" $cert)) }}
-	ssl_dhparam {{ printf "/etc/nginx/certs/%s.dhparam.pem" $cert }};
-	{{ end }}
+    {{ if (exists (printf "/etc/nginx/certs/%s.dhparam.pem" $cert)) }}
+    ssl_dhparam {{ printf "/etc/nginx/certs/%s.dhparam.pem" $cert }};
+    {{ end }}
 
-	{{ if (ne $https_method "noredirect") }}
-	add_header Strict-Transport-Security "max-age=31536000";
-	{{ end }}
+    {{ if (ne $https_method "noredirect") }}
+    add_header Strict-Transport-Security "max-age=31536000";
+    {{ end }}
 
-	{{ if (exists (printf "/etc/nginx/vhost.d/%s" $host)) }}
-	include {{ printf "/etc/nginx/vhost.d/%s" $host }};
-	{{ else if (exists "/etc/nginx/vhost.d/default") }}
-	include /etc/nginx/vhost.d/default;
-	{{ end }}
+    {{ if (exists (printf "/etc/nginx/vhost.d/%s" $host)) }}
+    include {{ printf "/etc/nginx/vhost.d/%s" $host }};
+    {{ else if (exists "/etc/nginx/vhost.d/default") }}
+    include /etc/nginx/vhost.d/default;
+    {{ end }}
 
-	location / {
-		{{ if eq $proto "uwsgi" }}
-		include uwsgi_params;
-		uwsgi_pass {{ trim $proto }}://{{ trim $host }};
-		{{ else }}
-		proxy_pass {{ trim $proto }}://{{ trim $host }};
-		{{ end }}
-		{{ if (exists (printf "/etc/nginx/htpasswd/%s" $host)) }}
-		auth_basic	"Restricted {{ $host }}";
-		auth_basic_user_file	{{ (printf "/etc/nginx/htpasswd/%s" $host) }};
-		{{ end }}
-                {{ if (exists (printf "/etc/nginx/vhost.d/%s_location" $host)) }}
-                include {{ printf "/etc/nginx/vhost.d/%s_location" $host}};
-                {{ else if (exists "/etc/nginx/vhost.d/default_location") }}
-                include /etc/nginx/vhost.d/default_location;
-                {{ end }}
-	}
+    location / {
+        {{ if eq $proto "uwsgi" }}
+        include uwsgi_params;
+        uwsgi_pass {{ trim $proto }}://{{ trim $host }};
+        {{ else }}
+        proxy_pass {{ trim $proto }}://{{ trim $host }};
+        {{ end }}
+        {{ if (exists (printf "/etc/nginx/htpasswd/%s" $host)) }}
+        auth_basic	"Restricted {{ $host }}";
+        auth_basic_user_file	{{ (printf "/etc/nginx/htpasswd/%s" $host) }};
+        {{ end }}
+        {{ if (exists (printf "/etc/nginx/vhost.d/%s_location" $host)) }}
+        include {{ printf "/etc/nginx/vhost.d/%s_location" $host}};
+        {{ else if (exists "/etc/nginx/vhost.d/default_location") }}
+        include /etc/nginx/vhost.d/default_location;
+        {{ end }}
+    }
 }
 
 {{ end }}
@@ -190,44 +210,44 @@ server {
 {{ if or (not $is_https) (eq $https_method "noredirect") }}
 
 server {
-	server_name {{ $host }};
-	listen 80 {{ $default_server }};
-	access_log /var/log/nginx/access.log vhost;
+    server_name {{ $host }};
+    listen 80 {{ $default_server }};
+    access_log /var/log/nginx/access.log vhost;
 
-	{{ if (exists (printf "/etc/nginx/vhost.d/%s" $host)) }}
-	include {{ printf "/etc/nginx/vhost.d/%s" $host }};
-	{{ else if (exists "/etc/nginx/vhost.d/default") }}
-	include /etc/nginx/vhost.d/default;
-	{{ end }}
+    {{ if (exists (printf "/etc/nginx/vhost.d/%s" $host)) }}
+    include {{ printf "/etc/nginx/vhost.d/%s" $host }};
+    {{ else if (exists "/etc/nginx/vhost.d/default") }}
+    include /etc/nginx/vhost.d/default;
+    {{ end }}
 
-	location / {
-		{{ if eq $proto "uwsgi" }}
-		include uwsgi_params;
-		uwsgi_pass {{ trim $proto }}://{{ trim $host }};
-		{{ else }}
-		proxy_pass {{ trim $proto }}://{{ trim $host }};
-		{{ end }}
-		{{ if (exists (printf "/etc/nginx/htpasswd/%s" $host)) }}
-		auth_basic	"Restricted {{ $host }}";
-		auth_basic_user_file	{{ (printf "/etc/nginx/htpasswd/%s" $host) }};
-		{{ end }}
-                {{ if (exists (printf "/etc/nginx/vhost.d/%s_location" $host)) }}
-                include {{ printf "/etc/nginx/vhost.d/%s_location" $host}};
-                {{ else if (exists "/etc/nginx/vhost.d/default_location") }}
-                include /etc/nginx/vhost.d/default_location;
-                {{ end }}
-	}
+    location / {
+        {{ if eq $proto "uwsgi" }}
+        include uwsgi_params;
+        uwsgi_pass {{ trim $proto }}://{{ trim $host }};
+        {{ else }}
+        proxy_pass {{ trim $proto }}://{{ trim $host }};
+        {{ end }}
+        {{ if (exists (printf "/etc/nginx/htpasswd/%s" $host)) }}
+        auth_basic	"Restricted {{ $host }}";
+        auth_basic_user_file	{{ (printf "/etc/nginx/htpasswd/%s" $host) }};
+        {{ end }}
+        {{ if (exists (printf "/etc/nginx/vhost.d/%s_location" $host)) }}
+        include {{ printf "/etc/nginx/vhost.d/%s_location" $host}};
+        {{ else if (exists "/etc/nginx/vhost.d/default_location") }}
+        include /etc/nginx/vhost.d/default_location;
+        {{ end }}
+    }
 }
 
 {{ if (and (not $is_https) (exists "/etc/nginx/certs/default.crt") (exists "/etc/nginx/certs/default.key")) }}
 server {
-	server_name {{ $host }};
-	listen 443 ssl http2 {{ $default_server }};
-	access_log /var/log/nginx/access.log vhost;
-	return 500;
+    server_name {{ $host }};
+    listen 443 ssl http2 {{ $default_server }};
+    access_log /var/log/nginx/access.log vhost;
+    return 500;
 
-	ssl_certificate /etc/nginx/certs/default.crt;
-	ssl_certificate_key /etc/nginx/certs/default.key;
+    ssl_certificate /etc/nginx/certs/default.crt;
+    ssl_certificate_key /etc/nginx/certs/default.key;
 }
 {{ end }}
 

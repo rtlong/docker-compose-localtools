@@ -6,8 +6,8 @@ services:
   dnsmasq:
     image: andyshinn/dnsmasq
     ports:
-      - '53:53/udp'
-      - '53:53/tcp'
+      - '15353:53/udp'
+      - '15353:53/tcp'
     container_name: dnsmasq
     # volumes:
     #   - /private/etc/resolv.conf:/etc/host_resolv.conf:ro
@@ -37,13 +37,15 @@ services:
       - '80:80'
       - '443:443'
     volumes:
-      - nginx:/etc/nginx/
+      - ./etc/nginx:/etc/nginx/
     command:
       - nginx
       - -g
       - 'daemon off; error_log /var/log/nginx/error.log info;'
     restart: always
     network_mode: bridge
+    tmpfs:
+      - /data/nginx/cache
 
   dockergen:
     image: jwilder/docker-gen
@@ -58,7 +60,7 @@ services:
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - ./nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl
-      - nginx:/etc/nginx/
+      - ./etc/nginx:/etc/nginx/
     restart: always
     network_mode: bridge
 
@@ -71,3 +73,16 @@ services:
   #   image: prologic/autodock-logger
   #   links:
   #     - autodock
+
+  cadvisor:
+    image: google/cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    container_name: cadvisor
+    restart: always
+    network_mode: bridge
+    environment:
+      VIRTUAL_HOST: cadvisor.local.dev

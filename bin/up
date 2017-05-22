@@ -1,11 +1,13 @@
 #!/bin/bash
 
 set -euo pipefail
+set -x
 
 docker-compose create
 
-for network in local.goodguide.com; do
+for network in local.goodguide.com local.rtlong.com; do
 	for container in dockergen nginx; do
+		docker network create "${network}" || :
 		docker network connect "${network}" "${container}" || :
 	done
 done
